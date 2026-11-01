@@ -18,6 +18,8 @@ class MemoryTripRepository implements TripRepository {
       startTime: DateTime(2026, 8, 24, 9, 20),
       endTime: DateTime(2026, 8, 24, 17, 40),
       totalDistance: 184.6,
+      isDemo: true,
+      stopAnalysisStatus: StopAnalysisStatus.completed,
       stops: [
         Stop(
           id: 's1',
@@ -52,6 +54,8 @@ class MemoryTripRepository implements TripRepository {
       startTime: DateTime(2026, 9, 7, 8),
       endTime: DateTime(2026, 9, 7, 16, 30),
       totalDistance: 312,
+      isDemo: true,
+      stopAnalysisStatus: StopAnalysisStatus.completed,
       stops: [
         Stop(
           id: 's3',
@@ -71,20 +75,104 @@ class MemoryTripRepository implements TripRepository {
       ],
     ),
   ];
+  final Map<String, List<Stop>> _storedStops = {};
+  final List<ManualMarker> _markers = [];
+  final Map<String, List<GpsPoint>> _points = {};
+
+  Trip _withStops(Trip trip) {
+    if (trip.isDemo) return trip;
+    final all = [...?_storedStops[trip.id]]
+      ..sort((a, b) => a.arrivalTime.compareTo(b.arrivalTime));
+    return Trip(
+      id: trip.id,
+      title: trip.title,
+      startTime: trip.startTime,
+      endTime: trip.endTime,
+      totalDistance: trip.totalDistance,
+      gpsPoints: trip.gpsPoints.isEmpty
+          ? (_points[trip.id] ?? const [])
+          : trip.gpsPoints,
+      stops: all.where((s) => !s.isExcluded).toList(),
+      excludedStops: all.where((s) => s.isExcluded).toList(),
+      privacySetting: trip.privacySetting,
+      shareSetting: trip.shareSetting,
+      status: trip.status,
+      stopAnalysisStatus: trip.stopAnalysisStatus,
+    );
+  }
+
   @override
-  Future<List<Trip>> getRecentTrips() async => List.unmodifiable(_trips);
+  Future<List<Trip>> getRecentTrips() async =>
+      List.unmodifiable(_trips.map(_withStops));
   @override
-  Future<Trip?> getTrip(String id) async =>
-      _trips.where((trip) => trip.id == id).cast<Trip?>().firstOrNull;
+  Future<Trip?> getTrip(String id) async => _trips
+      .where((trip) => trip.id == id)
+      .map(_withStops)
+      .cast<Trip?>()
+      .firstOrNull;
   @override
   Future<Trip?> getRecordingTrip() async => _trips
       .where((trip) => trip.status == 'recording')
       .cast<Trip?>()
       .firstOrNull;
   @override
-  Future<void> saveTrip(Trip trip) async => _trips.insert(0, trip);
+  Future<void> saveTrip(Trip trip) async {
+    _trips.removeWhere((t) => t.id == trip.id);
+    _trips.insert(0, trip);
+  }
+
   @override
-  Future<void> saveGpsPoint(String tripId, GpsPoint point) async {}
+  Future<void> saveGpsPoint(String tripId, GpsPoint point) async =>
+      _points.putIfAbsent(tripId, () => []).add(point);
   @override
-  Future<void> saveManualMarker(ManualMarker marker) async {}
+  Future<void> saveManualMarker(ManualMarker marker) async =>
+      _markers.add(marker);
+  @override
+  Future<List<ManualMarker>> getManualMarkers(String tripId) async =>
+      _markers.where((m) => m.tripId == tripId).toList();
+  @override
+  Future<List<Stop>> getAllStops(String tripId) async => [
+    ...?_storedStops[tripId],
+  ];
+  @override
+  Future<void> saveStopChanges(
+    String tripId, {
+    List<Stop> upserts = const [],
+    List<String> deleteIds = const [],
+    StopAnalysisStatus? status,
+  }) async {
+    final stops = _storedStops.putIfAbsent(tripId, () => []);
+    stops.removeWhere((s) => deleteIds.contains(s.id));
+    for (final stop in upserts) {
+      stops.removeWhere((s) => s.id == stop.id);
+      stops.add(stop);
+    }
+    if (status != null) await setStopAnalysisStatus(tripId, status);
+  }
+
+  @override
+  Future<void> setStopAnalysisStatus(
+    String tripId,
+    StopAnalysisStatus status,
+  ) async {
+    final index = _trips.indexWhere((t) => t.id == tripId);
+    if (index < 0) return;
+    final t = _trips[index];
+    _trips[index] = Trip(
+      id: t.id,
+      title: t.title,
+      startTime: t.startTime,
+      endTime: t.endTime,
+      totalDistance: t.totalDistance,
+      gpsPoints: t.gpsPoints,
+      stops: t.stops,
+      excludedStops: t.excludedStops,
+      photos: t.photos,
+      privacySetting: t.privacySetting,
+      shareSetting: t.shareSetting,
+      status: t.status,
+      stopAnalysisStatus: status,
+      isDemo: t.isDemo,
+    );
+  }
 }

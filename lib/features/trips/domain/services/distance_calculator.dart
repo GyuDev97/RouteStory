@@ -4,14 +4,26 @@ import '../entities/gps_point.dart';
 abstract final class DistanceCalculator {
   static const maximumAccuracyMeters = 50.0;
   static const maximumSpeedMetersPerSecond = 75.0;
-  static double metersBetween(GpsPoint a, GpsPoint b) {
+  static double metersBetween(GpsPoint a, GpsPoint b) => metersBetweenCoordinates(
+    a.latitude,
+    a.longitude,
+    b.latitude,
+    b.longitude,
+  );
+
+  static double metersBetweenCoordinates(
+    double latitudeA,
+    double longitudeA,
+    double latitudeB,
+    double longitudeB,
+  ) {
     const earthRadius = 6371000.0;
-    final lat = _radians(b.latitude - a.latitude);
-    final lng = _radians(b.longitude - a.longitude);
+    final lat = _radians(latitudeB - latitudeA);
+    final lng = _radians(longitudeB - longitudeA);
     final h =
         sin(lat / 2) * sin(lat / 2) +
-        cos(_radians(a.latitude)) *
-            cos(_radians(b.latitude)) *
+        cos(_radians(latitudeA)) *
+            cos(_radians(latitudeB)) *
             sin(lng / 2) *
             sin(lng / 2);
     return 2 * earthRadius * atan2(sqrt(h), sqrt(1 - h));

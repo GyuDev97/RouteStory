@@ -178,6 +178,9 @@ class TripRecordingController extends Notifier<TripRecordingState> {
       status: 'completed',
     );
     await ref.read(tripRepositoryProvider).saveTrip(completed);
+    // Stop analysis runs after the raw data is saved and never throws; if it
+    // fails the trip stays intact and is re-analyzed later.
+    await ref.read(stopServiceProvider).analyze(completed.id);
     ref.invalidate(recentTripsProvider);
     state = state.copyWith(phase: RecordingPhase.completed, trip: completed);
     return await ref.read(tripRepositoryProvider).getTrip(completed.id) ??
