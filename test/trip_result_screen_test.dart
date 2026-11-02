@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:route_story/features/trips/application/trip_providers.dart';
@@ -19,6 +19,7 @@ void main() {
       endTime: DateTime(2026, 9, 1, 18),
       totalDistance: 12,
       stopAnalysisStatus: StopAnalysisStatus.completed,
+      photoMatchStatus: PhotoMatchStatus.completed,
       stops: [
         Stop(
           id: 's',

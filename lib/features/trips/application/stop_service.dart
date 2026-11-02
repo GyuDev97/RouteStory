@@ -7,6 +7,7 @@ import '../domain/services/stop_detection_config.dart';
 import '../domain/services/stop_detection_service.dart';
 import '../domain/services/stop_editing.dart';
 import '../domain/services/stop_reconciler.dart';
+import 'trip_task_queue.dart';
 
 enum StopAnalysisOutcome { completed, failed, skipped }
 
@@ -20,16 +21,18 @@ class StopService {
   StopService(
     this._repository, {
     StopDetectionConfig config = const StopDetectionConfig(),
+    TripTaskQueue? queue,
   }) : _config = config,
+       _queue = queue ?? TripTaskQueue(),
        _detector = StopDetectionService(config);
   final TripRepository _repository;
   final StopDetectionConfig _config;
   final StopDetectionService _detector;
-  final _queues = <String, Future<void>>{};
+  final TripTaskQueue _queue;
   final _analyses = <String, Future<StopAnalysisOutcome>>{};
 
   Future<StopAnalysisOutcome> analyze(String tripId) =>
-      _analyses[tripId] ??= _serial(tripId, () => _analyze(tripId)).whenComplete(
+      _analyses[tripId] ??= _queue.run(tripId, () => _analyze(tripId)).whenComplete(
         () {
           _analyses.remove(tripId);
         },
@@ -94,7 +97,7 @@ class StopService {
   /// Merges [stopId] with the next visible stop in time order.
   /// Returns false when there is no next stop.
   Future<bool> mergeWithNext(String tripId, String stopId) =>
-      _serial(tripId, () async {
+      _queue.run(tripId, () async {
         final visible = (await _repository.getAllStops(tripId))
             .where((s) => !s.isExcluded)
             .toList()
@@ -110,6 +113,7 @@ class StopService {
           tripId,
           upserts: [merged],
           deleteIds: removed,
+          photoStopRemap: {for (final id in removed) id: merged.id},
         );
         return true;
       });
@@ -119,7 +123,7 @@ class StopService {
     String stopId,
     Stop Function(Stop, String) edit,
     String? argument,
-  ) => _serial(tripId, () async {
+  ) => _queue.run(tripId, () async {
     final stop = (await _repository.getAllStops(
       tripId,
     )).where((s) => s.id == stopId).firstOrNull;
@@ -129,21 +133,4 @@ class StopService {
       upserts: [edit(stop, argument ?? '')],
     );
   });
-
-  Future<T> _serial<T>(String tripId, Future<T> Function() action) {
-    final previous = _queues[tripId] ?? Future<void>.value();
-    final completer = Completer<T>();
-    final next = previous.catchError((_) {}).then((_) async {
-      try {
-        completer.complete(await action());
-      } catch (error, stack) {
-        completer.completeError(error, stack);
-      }
-    });
-    _queues[tripId] = next;
-    next.whenComplete(() {
-      if (identical(_queues[tripId], next)) _queues.remove(tripId);
-    });
-    return completer.future;
-  }
 }

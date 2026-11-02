@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/trip_image.dart';
+import 'trip_photo_widgets.dart';
 import '../application/trip_providers.dart';
 import '../domain/entities/trip.dart';
+import '../domain/services/distance_formatter.dart';
 import 'trip_result_screen.dart';
 
 class TripsScreen extends ConsumerWidget {
@@ -59,9 +60,7 @@ class _ArchiveItem extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             child: AspectRatio(
               aspectRatio: 16 / 10,
-              child: TripImage(
-                path: trip.photos.isEmpty ? null : trip.photos.first.localPath,
-              ),
+              child: TripCoverImage(trip: trip),
             ),
           ),
           const SizedBox(height: 15),
@@ -70,7 +69,7 @@ class _ArchiveItem extends StatelessWidget {
           Text(_date, style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 6),
           Text(
-            '${trip.totalDistance.toStringAsFixed(1)} km · ${trip.stops.length} Stops',
+            '${formatKilometers(trip.totalDistance)} · ${trip.stops.length} Stops',
             style: const TextStyle(
               fontSize: 12,
               color: AppTheme.forest,
@@ -82,3 +81,5 @@ class _ArchiveItem extends StatelessWidget {
     ),
   );
 }
+
+

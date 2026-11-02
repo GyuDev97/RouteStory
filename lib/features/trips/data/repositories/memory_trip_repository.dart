@@ -17,7 +17,7 @@ class MemoryTripRepository implements TripRepository {
       title: '늦여름, 동해',
       startTime: DateTime(2026, 8, 24, 9, 20),
       endTime: DateTime(2026, 8, 24, 17, 40),
-      totalDistance: 184.6,
+      totalDistance: 184600,
       isDemo: true,
       stopAnalysisStatus: StopAnalysisStatus.completed,
       stops: [
@@ -53,7 +53,7 @@ class MemoryTripRepository implements TripRepository {
       title: '가을의 설악',
       startTime: DateTime(2026, 9, 7, 8),
       endTime: DateTime(2026, 9, 7, 16, 30),
-      totalDistance: 312,
+      totalDistance: 312000,
       isDemo: true,
       stopAnalysisStatus: StopAnalysisStatus.completed,
       stops: [
@@ -78,26 +78,18 @@ class MemoryTripRepository implements TripRepository {
   final Map<String, List<Stop>> _storedStops = {};
   final List<ManualMarker> _markers = [];
   final Map<String, List<GpsPoint>> _points = {};
+  final Map<String, List<TripPhoto>> _storedPhotos = {};
 
   Trip _withStops(Trip trip) {
     if (trip.isDemo) return trip;
     final all = [...?_storedStops[trip.id]]
       ..sort((a, b) => a.arrivalTime.compareTo(b.arrivalTime));
-    return Trip(
-      id: trip.id,
-      title: trip.title,
-      startTime: trip.startTime,
-      endTime: trip.endTime,
-      totalDistance: trip.totalDistance,
-      gpsPoints: trip.gpsPoints.isEmpty
-          ? (_points[trip.id] ?? const [])
-          : trip.gpsPoints,
+    return trip.copyWith(
+      gpsPoints: trip.gpsPoints.isEmpty ? (_points[trip.id] ?? const []) : trip.gpsPoints,
       stops: all.where((s) => !s.isExcluded).toList(),
       excludedStops: all.where((s) => s.isExcluded).toList(),
-      privacySetting: trip.privacySetting,
-      shareSetting: trip.shareSetting,
-      status: trip.status,
-      stopAnalysisStatus: trip.stopAnalysisStatus,
+      photos: [...?_storedPhotos[trip.id]]
+        ..sort((a, b) => (a.takenAt ?? DateTime(0)).compareTo(b.takenAt ?? DateTime(0))),
     );
   }
 
@@ -140,12 +132,20 @@ class MemoryTripRepository implements TripRepository {
     List<Stop> upserts = const [],
     List<String> deleteIds = const [],
     StopAnalysisStatus? status,
+    Map<String, String> photoStopRemap = const {},
   }) async {
     final stops = _storedStops.putIfAbsent(tripId, () => []);
     stops.removeWhere((s) => deleteIds.contains(s.id));
     for (final stop in upserts) {
       stops.removeWhere((s) => s.id == stop.id);
       stops.add(stop);
+    }
+    final photos = _storedPhotos[tripId];
+    if (photos != null && photoStopRemap.isNotEmpty) {
+      for (final (i, photo) in photos.indexed.toList()) {
+        final target = photoStopRemap[photo.stopId];
+        if (target != null) photos[i] = photo.copyWith(stopId: target);
+      }
     }
     if (status != null) await setStopAnalysisStatus(tripId, status);
   }
@@ -154,25 +154,52 @@ class MemoryTripRepository implements TripRepository {
   Future<void> setStopAnalysisStatus(
     String tripId,
     StopAnalysisStatus status,
-  ) async {
+  ) async => _updateTrip(tripId, stopStatus: status);
+
+  @override
+  Future<List<TripPhoto>> getPhotos(String tripId) async => [
+    ...?_storedPhotos[tripId],
+  ];
+
+  @override
+  Future<void> savePhotos(
+    String tripId, {
+    List<TripPhoto> upserts = const [],
+    PhotoMatchStatus? status,
+  }) async {
+    final photos = _storedPhotos.putIfAbsent(tripId, () => []);
+    for (final photo in upserts) {
+      photos.removeWhere((p) => p.id == photo.id);
+      photos.add(photo);
+    }
+    if (status != null) await setPhotoMatchStatus(tripId, status);
+  }
+
+  @override
+  Future<void> setPhotoMatchStatus(
+    String tripId,
+    PhotoMatchStatus status,
+  ) async => _updateTrip(tripId, photoStatus: status);
+
+  @override
+  Future<void> updateTripDetails(String tripId, {String? title, String? coverPhotoId, bool clearCover = false}) async {
     final index = _trips.indexWhere((t) => t.id == tripId);
     if (index < 0) return;
-    final t = _trips[index];
-    _trips[index] = Trip(
-      id: t.id,
-      title: t.title,
-      startTime: t.startTime,
-      endTime: t.endTime,
-      totalDistance: t.totalDistance,
-      gpsPoints: t.gpsPoints,
-      stops: t.stops,
-      excludedStops: t.excludedStops,
-      photos: t.photos,
-      privacySetting: t.privacySetting,
-      shareSetting: t.shareSetting,
-      status: t.status,
-      stopAnalysisStatus: status,
-      isDemo: t.isDemo,
+    _trips[index] = _trips[index].copyWith(title: title, coverPhotoId: coverPhotoId, clearCover: clearCover);
+  }
+
+  void _updateTrip(
+    String tripId, {
+    StopAnalysisStatus? stopStatus,
+    PhotoMatchStatus? photoStatus,
+  }) {
+    final index = _trips.indexWhere((t) => t.id == tripId);
+    if (index < 0) return;
+    _trips[index] = _trips[index].copyWith(
+      stopAnalysisStatus: stopStatus,
+      photoMatchStatus: photoStatus,
     );
   }
 }
+
+

@@ -1,10 +1,11 @@
-﻿import 'package:path/path.dart';
+import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/entities/gps_point.dart';
 import '../../domain/entities/manual_marker.dart';
 import '../../domain/entities/stop.dart';
 import '../../domain/entities/trip.dart';
+import '../../domain/entities/trip_photo.dart';
 import '../../domain/repositories/trip_repository.dart';
 import 'memory_trip_repository.dart';
 
@@ -19,7 +20,7 @@ class LocalTripRepository implements TripRepository {
   Future<Database>? _database;
   Future<Database> get _db => _database ??= (_databaseOpener ?? _open)();
 
-  static const databaseVersion = 2;
+  static const databaseVersion = 4;
 
   /// Opens the DB at [path] with this repository's schema and migrations.
   static Future<Database> openAt(
@@ -32,7 +33,7 @@ class LocalTripRepository implements TripRepository {
       singleInstance: singleInstance,
       onCreate: (db, version) async {
         await db.execute(
-          'CREATE TABLE trips (id TEXT PRIMARY KEY, title TEXT NOT NULL, start_time INTEGER NOT NULL, end_time INTEGER, total_distance REAL NOT NULL, status TEXT NOT NULL, privacy_setting TEXT NOT NULL, share_setting TEXT NOT NULL, stop_analysis_status TEXT NOT NULL DEFAULT \'pending\')',
+          'CREATE TABLE trips (id TEXT PRIMARY KEY, title TEXT NOT NULL, start_time INTEGER NOT NULL, end_time INTEGER, total_distance REAL NOT NULL, status TEXT NOT NULL, privacy_setting TEXT NOT NULL, share_setting TEXT NOT NULL, stop_analysis_status TEXT NOT NULL DEFAULT \'pending\', photo_match_status TEXT NOT NULL DEFAULT \'pending\', cover_photo_id TEXT)',
         );
         await db.execute(
           'CREATE TABLE gps_points (id INTEGER PRIMARY KEY AUTOINCREMENT, trip_id TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, altitude REAL NOT NULL, timestamp INTEGER NOT NULL, accuracy REAL NOT NULL, speed REAL, heading REAL)',
@@ -44,14 +45,29 @@ class LocalTripRepository implements TripRepository {
           'CREATE TABLE manual_markers (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, timestamp INTEGER NOT NULL, memo TEXT)',
         );
         await _createStopsTable(db);
+        await _createPhotosTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        // v1 -> v2: additive only; existing trips, points and markers are kept.
+        // Additive only; existing trips, points and markers are kept.
         if (oldVersion < 2) {
           await db.execute(
             'ALTER TABLE trips ADD COLUMN stop_analysis_status TEXT NOT NULL DEFAULT \'pending\'',
           );
           await _createStopsTable(db);
+        } else if (oldVersion < 3) {
+          await db.execute('ALTER TABLE stops ADD COLUMN cover_photo_id TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+            'ALTER TABLE trips ADD COLUMN photo_match_status TEXT NOT NULL DEFAULT \'pending\'',
+          );
+          await _createPhotosTable(db);
+        } else if (oldVersion < 4) {
+          await db.execute('ALTER TABLE photos ADD COLUMN width INTEGER');
+          await db.execute('ALTER TABLE photos ADD COLUMN height INTEGER');
+        }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE trips ADD COLUMN cover_photo_id TEXT');
         }
       },
     );
@@ -60,11 +76,18 @@ class LocalTripRepository implements TripRepository {
 
   static Future<void> _createStopsTable(Database db) async {
     await db.execute(
-      'CREATE TABLE stops (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL, place_name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, arrival_time INTEGER NOT NULL, departure_time INTEGER, source TEXT NOT NULL, memo TEXT, is_excluded INTEGER NOT NULL DEFAULT 0, is_name_edited INTEGER NOT NULL DEFAULT 0, is_user_modified INTEGER NOT NULL DEFAULT 0, marker_ids TEXT NOT NULL DEFAULT \'\')',
+      'CREATE TABLE stops (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL, place_name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, arrival_time INTEGER NOT NULL, departure_time INTEGER, source TEXT NOT NULL, memo TEXT, is_excluded INTEGER NOT NULL DEFAULT 0, is_name_edited INTEGER NOT NULL DEFAULT 0, is_user_modified INTEGER NOT NULL DEFAULT 0, marker_ids TEXT NOT NULL DEFAULT \'\', cover_photo_id TEXT)',
     );
     await db.execute(
       'CREATE INDEX stops_trip_time ON stops(trip_id, arrival_time)',
     );
+  }
+
+  static Future<void> _createPhotosTable(Database db) async {
+    await db.execute(
+      'CREATE TABLE photos (id TEXT PRIMARY KEY, trip_id TEXT NOT NULL, asset_id TEXT, local_path TEXT NOT NULL DEFAULT \'\', taken_at INTEGER, latitude REAL, longitude REAL, stop_id TEXT, match_method TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0, is_manually_edited INTEGER NOT NULL DEFAULT 0, is_excluded INTEGER NOT NULL DEFAULT 0, width INTEGER, height INTEGER)',
+    );
+    await db.execute('CREATE INDEX photos_trip ON photos(trip_id)');
   }
 
   Future<Database> _open() async =>
@@ -171,6 +194,7 @@ class LocalTripRepository implements TripRepository {
     List<Stop> upserts = const [],
     List<String> deleteIds = const [],
     StopAnalysisStatus? status,
+    Map<String, String> photoStopRemap = const {},
   }) async => (await _db).transaction((txn) async {
     for (final id in deleteIds) {
       await txn.delete(
@@ -184,6 +208,14 @@ class LocalTripRepository implements TripRepository {
         'stops',
         _stopMap(tripId, stop),
         conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    for (final remap in photoStopRemap.entries) {
+      await txn.update(
+        'photos',
+        {'stop_id': remap.value},
+        where: 'trip_id = ? AND stop_id = ?',
+        whereArgs: [tripId, remap.key],
       );
     }
     if (status != null) {
@@ -221,6 +253,7 @@ class LocalTripRepository implements TripRepository {
     'is_name_edited': stop.isNameEdited ? 1 : 0,
     'is_user_modified': stop.isUserModified ? 1 : 0,
     'marker_ids': stop.markerIds.join(','),
+    'cover_photo_id': stop.coverPhotoId,
   };
 
   Stop _stopFromRow(Map<String, Object?> row) => Stop(
@@ -247,7 +280,101 @@ class LocalTripRepository implements TripRepository {
         .split(',')
         .where((id) => id.isNotEmpty)
         .toList(),
+    coverPhotoId: row['cover_photo_id'] as String?,
   );
+
+  @override
+  Future<List<TripPhoto>> getPhotos(String tripId) async =>
+      (await (await _db).query(
+            'photos',
+            where: 'trip_id = ?',
+            whereArgs: [tripId],
+            orderBy: 'taken_at',
+          ))
+          .map(_photoFromRow)
+          .toList();
+
+  @override
+  Future<void> savePhotos(
+    String tripId, {
+    List<TripPhoto> upserts = const [],
+    PhotoMatchStatus? status,
+  }) async => (await _db).transaction((txn) async {
+    for (final photo in upserts) {
+      await txn.insert('photos', {
+        'id': photo.id,
+        'trip_id': tripId,
+        'asset_id': photo.assetId,
+        'local_path': photo.localPath,
+        'taken_at': photo.takenAt?.millisecondsSinceEpoch,
+        'latitude': photo.latitude,
+        'longitude': photo.longitude,
+        'stop_id': photo.stopId,
+        'match_method': photo.matchMethod.name,
+        'confidence': photo.matchConfidence,
+        'is_manually_edited': photo.isManuallyEdited ? 1 : 0,
+        'is_excluded': photo.isExcluded ? 1 : 0,
+        'width': photo.width,
+        'height': photo.height,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    if (status != null) {
+      await txn.update(
+        'trips',
+        {'photo_match_status': status.name},
+        where: 'id = ?',
+        whereArgs: [tripId],
+      );
+    }
+  });
+
+  @override
+  Future<void> setPhotoMatchStatus(
+    String tripId,
+    PhotoMatchStatus status,
+  ) async => (await _db).update(
+    'trips',
+    {'photo_match_status': status.name},
+    where: 'id = ?',
+    whereArgs: [tripId],
+  );
+
+  TripPhoto _photoFromRow(Map<String, Object?> row) => TripPhoto(
+    id: row['id'] as String,
+    tripId: row['trip_id'] as String,
+    assetId: row['asset_id'] as String?,
+    localPath: (row['local_path'] as String?) ?? '',
+    takenAt: row['taken_at'] == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(row['taken_at'] as int),
+    latitude: row['latitude'] as double?,
+    longitude: row['longitude'] as double?,
+    stopId: row['stop_id'] as String?,
+    matchMethod: PhotoMatchMethod.values.firstWhere(
+      (m) => m.name == row['match_method'],
+      orElse: () => PhotoMatchMethod.none,
+    ),
+    matchConfidence: (row['confidence'] as num?)?.toDouble() ?? 0,
+    isManuallyEdited: row['is_manually_edited'] == 1,
+    isExcluded: row['is_excluded'] == 1,
+    width: row['width'] as int?,
+    height: row['height'] as int?,
+  );
+
+  @override
+  Future<void> updateTripDetails(
+    String tripId, {
+    String? title,
+    String? coverPhotoId,
+    bool clearCover = false,
+  }) async {
+    final values = <String, Object?>{
+      'title': ?title,
+      if (clearCover) 'cover_photo_id': null else 'cover_photo_id': ?coverPhotoId,
+    };
+    if (values.isEmpty) return;
+    await (await _db).update('trips', values, where: 'id = ?', whereArgs: [tripId]);
+  }
 
   Future<Trip> _readTrip(Map<String, Object?> row) async {
     final db = await _db;
@@ -273,6 +400,7 @@ class LocalTripRepository implements TripRepository {
             )
             .toList();
     final stops = await getAllStops(row['id'] as String);
+    final photos = await getPhotos(row['id'] as String);
     return Trip(
       id: row['id'] as String,
       title: row['title'] as String,
@@ -284,6 +412,7 @@ class LocalTripRepository implements TripRepository {
       gpsPoints: points,
       stops: stops.where((s) => !s.isExcluded).toList(),
       excludedStops: stops.where((s) => s.isExcluded).toList(),
+      photos: photos,
       privacySetting: row['privacy_setting'] as String,
       shareSetting: row['share_setting'] as String,
       status: row['status'] as String,
@@ -291,6 +420,11 @@ class LocalTripRepository implements TripRepository {
         (s) => s.name == row['stop_analysis_status'],
         orElse: () => StopAnalysisStatus.pending,
       ),
+      photoMatchStatus: PhotoMatchStatus.values.firstWhere(
+        (s) => s.name == row['photo_match_status'],
+        orElse: () => PhotoMatchStatus.pending,
+      ),
+      coverPhotoId: row['cover_photo_id'] as String?,
     );
   }
 
@@ -304,6 +438,7 @@ class LocalTripRepository implements TripRepository {
     'privacy_setting': trip.privacySetting,
     'share_setting': trip.shareSetting,
     'stop_analysis_status': trip.stopAnalysisStatus.name,
+    'photo_match_status': trip.photoMatchStatus.name,
   };
 }
 

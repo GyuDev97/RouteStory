@@ -181,6 +181,19 @@ class TripRecordingController extends Notifier<TripRecordingState> {
     // Stop analysis runs after the raw data is saved and never throws; if it
     // fails the trip stays intact and is re-analyzed later.
     await ref.read(stopServiceProvider).analyze(completed.id);
+    // Photo matching is its own step and does not hold up the result screen;
+    // the screen refreshes when it finishes.
+    final photos = ref.read(photoMatchingServiceProvider);
+    unawaited(
+      photos.match(completed.id, requestPermission: true).whenComplete(() {
+        try {
+          ref.invalidate(tripDetailProvider(completed.id));
+          ref.invalidate(recentTripsProvider);
+        } catch (_) {
+          // Provider already disposed; the stored result is picked up later.
+        }
+      }),
+    );
     ref.invalidate(recentTripsProvider);
     state = state.copyWith(phase: RecordingPhase.completed, trip: completed);
     return await ref.read(tripRepositoryProvider).getTrip(completed.id) ??

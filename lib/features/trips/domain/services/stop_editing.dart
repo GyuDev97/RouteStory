@@ -1,4 +1,4 @@
-import '../entities/stop.dart';
+﻿import '../entities/stop.dart';
 
 /// User edits on stops. Every edit flags the stop as user-modified so
 /// re-analysis leaves it alone.
@@ -66,6 +66,7 @@ abstract final class StopEditing {
       isNameEdited: primary.isNameEdited || secondary.isNameEdited,
       isUserModified: true,
       markerIds: markerIds,
+      coverPhotoId: primary.coverPhotoId ?? secondary.coverPhotoId,
     );
   }
 
@@ -93,3 +94,4 @@ abstract final class StopEditing {
     return seen.isEmpty ? null : seen.join('\n');
   }
 }
+

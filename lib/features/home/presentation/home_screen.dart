@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/route_story_button.dart';
-import '../../../core/widgets/trip_image.dart';
+import '../../trips/presentation/trip_photo_widgets.dart';
 import '../../trips/application/trip_providers.dart';
 import '../../trips/application/trip_recording_controller.dart';
 import '../../trips/domain/entities/trip.dart';
+import '../../trips/domain/services/distance_formatter.dart';
 import '../../trips/presentation/record_trip_screen.dart';
 import '../../trips/presentation/trip_result_screen.dart';
 
@@ -147,11 +148,7 @@ class _TripCard extends StatelessWidget {
               child: SizedBox(
                 width: 74,
                 height: 74,
-                child: TripImage(
-                  path: trip.photos.isEmpty
-                      ? null
-                      : trip.photos.first.localPath,
-                ),
+                child: TripCoverImage(trip: trip),
               ),
             ),
             const SizedBox(width: 15),
@@ -167,7 +164,7 @@ class _TripCard extends StatelessWidget {
                   Text(_date, style: Theme.of(context).textTheme.bodyMedium),
                   const SizedBox(height: 7),
                   Text(
-                    '${trip.totalDistance.toStringAsFixed(1)} km · ${trip.stops.length} Stops · ${trip.photos.length} Photos',
+                    '${formatKilometers(trip.totalDistance)} · ${trip.stops.length} Stops · ${trip.activePhotos.length} Photos',
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppTheme.forest,
@@ -182,3 +179,5 @@ class _TripCard extends StatelessWidget {
     ),
   );
 }
+
+

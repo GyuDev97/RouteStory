@@ -16,6 +16,7 @@ class Stop {
     this.isNameEdited = false,
     this.isUserModified = false,
     this.markerIds = const [],
+    this.coverPhotoId,
   });
 
   /// An empty [placeName] means the stop has not been named yet.
@@ -24,6 +25,8 @@ class Stop {
   final DateTime arrivalTime;
   final DateTime? departureTime;
   final String? memo;
+
+  /// Demo trips only; real trips link photos through `TripPhoto.stopId`.
   final List<String> photoIds;
   final StopSource source;
 
@@ -36,6 +39,9 @@ class Stop {
 
   /// ManualMarkers that were linked to this stop.
   final List<String> markerIds;
+
+  /// Photo the user picked as the stop's representative photo.
+  final String? coverPhotoId;
 
   Duration? get dwell => departureTime?.difference(arrivalTime);
 
@@ -51,6 +57,7 @@ class Stop {
     bool? isNameEdited,
     bool? isUserModified,
     List<String>? markerIds,
+    String? coverPhotoId,
   }) => Stop(
     id: id,
     tripId: tripId,
@@ -66,5 +73,6 @@ class Stop {
     isNameEdited: isNameEdited ?? this.isNameEdited,
     isUserModified: isUserModified ?? this.isUserModified,
     markerIds: markerIds ?? this.markerIds,
+    coverPhotoId: coverPhotoId ?? this.coverPhotoId,
   );
 }

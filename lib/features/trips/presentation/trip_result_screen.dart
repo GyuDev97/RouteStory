@@ -1,13 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/map_preview.dart';
 import '../../../core/widgets/route_story_button.dart';
-import '../../../core/widgets/trip_image.dart';
 import '../application/trip_providers.dart';
 import '../domain/entities/stop.dart';
 import '../domain/entities/trip.dart';
 import '../domain/entities/trip_photo.dart';
+import '../domain/services/distance_formatter.dart';
+import '../domain/services/trip_timeline_builder.dart';
+import 'gps_debug_screen.dart';
+import 'trip_photo_sections.dart';
+import 'trip_photo_widgets.dart';
 
 class TripResultScreen extends ConsumerWidget {
   const TripResultScreen({super.key, required this.trip});
@@ -26,6 +31,7 @@ class TripResultScreen extends ConsumerWidget {
     final current = trip.isDemo
         ? trip
         : ref.watch(tripDetailProvider(trip.id)).value ?? trip;
+    final timeline = current.isDemo ? null : TripTimelineBuilder.build(current);
     return Scaffold(
       body: SafeArea(
         child: ListView(
@@ -38,25 +44,64 @@ class TripResultScreen extends ConsumerWidget {
                   icon: const Icon(Icons.arrow_back, size: 20),
                 ),
                 const Spacer(),
-                const Icon(Icons.more_horiz, size: 20),
+                if (kDebugMode && !current.isDemo)
+                  IconButton(
+                    tooltip: 'GPS 점검 (debug)',
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => GpsDebugScreen(trip: current),
+                      ),
+                    ),
+                    icon: const Icon(Icons.bug_report_outlined, size: 20),
+                  )
+                else
+                  const Icon(Icons.more_horiz, size: 20),
               ],
             ),
             const SizedBox(height: 22),
-            Text(
-              current.title,
-              style: Theme.of(context).textTheme.headlineMedium,
+            if (timeline != null) ProgressBanner(trip: current),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    current.title,
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+                if (!current.isDemo)
+                  IconButton(
+                    tooltip: '제목 수정',
+                    onPressed: () async {
+                      final title = await _askText(
+                        context,
+                        '여행 제목',
+                        current.title,
+                        '어떤 여행이었나요?',
+                      );
+                      if (title == null) return;
+                      await ref
+                          .read(tripServiceProvider)
+                          .rename(trip.id, title);
+                      _refresh(ref);
+                    },
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                  ),
+              ],
             ),
             const SizedBox(height: 7),
             Text(_date(current), style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: 26),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: AspectRatio(
-                aspectRatio: 16 / 10,
-                child: TripImage(
-                  path: current.photos.isEmpty
-                      ? null
-                      : current.photos.first.localPath,
+            GestureDetector(
+              onTap: timeline != null && current.activePhotos.isNotEmpty
+                  ? () async {
+                      await showCoverPicker(context, ref, current);
+                    }
+                  : null,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: AspectRatio(
+                  aspectRatio: 16 / 10,
+                  child: TripCoverImage(trip: current),
                 ),
               ),
             ),
@@ -64,7 +109,7 @@ class TripResultScreen extends ConsumerWidget {
             Row(
               children: [
                 _Metric(
-                  value: '${current.totalDistance.toStringAsFixed(1)} km',
+                  value: formatKilometers(current.totalDistance),
                   label: '총 이동거리',
                 ),
                 _Metric(value: _duration(current), label: '여행시간'),
@@ -102,21 +147,26 @@ class TripResultScreen extends ConsumerWidget {
                 ),
               )
             else
-              ...current.stops.indexed.map(
+              ...timeline!.stops.map(
                 (entry) => _VisitStory(
-                  stop: entry.$2,
-                  order: entry.$1 + 1,
-                  isLast: entry.$1 == current.stops.length - 1,
+                  stop: entry.stop,
+                  order: entry.order,
+                  photos: entry.photos,
+                  onPhotoTap: (photo) =>
+                      showPhotoActions(context, ref, current, photo),
+                  isLast: entry.order == timeline.stops.length,
                   onMenu: () => _openMenu(
                     context,
                     ref,
                     current,
-                    entry.$2,
-                    entry.$1,
+                    entry.stop,
+                    entry.order - 1,
                   ),
                 ),
               ),
             if (current.stops.isEmpty) _EmptyTimeline(trip: current),
+            if (timeline != null)
+              PhotoSections(trip: current, timeline: timeline),
             if (!current.isDemo && current.excludedStops.isNotEmpty)
               _RestoreExcluded(trip: current, onChanged: () => _refresh(ref)),
             const SizedBox(height: 18),
@@ -212,16 +262,24 @@ class TripResultScreen extends ConsumerWidget {
     _refresh(ref);
   }
 
-  Future<String?> _askName(BuildContext context, String current) {
+  Future<String?> _askName(BuildContext context, String current) =>
+      _askText(context, '장소 이름', current, '어떤 곳이었나요?');
+
+  Future<String?> _askText(
+    BuildContext context,
+    String title,
+    String current,
+    String hint,
+  ) {
     final controller = TextEditingController(text: current);
     return showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('장소 이름'),
+        title: Text(title),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '어떤 곳이었나요?'),
+          decoration: InputDecoration(hintText: hint),
         ),
         actions: [
           TextButton(
@@ -344,11 +402,15 @@ class _VisitStory extends StatelessWidget {
     required this.order,
     required this.isLast,
     required this.onMenu,
+    required this.photos,
+    required this.onPhotoTap,
   });
   final Stop stop;
   final int order;
   final bool isLast;
   final VoidCallback onMenu;
+  final List<TripPhoto> photos;
+  final void Function(TripPhoto photo) onPhotoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -441,6 +503,19 @@ class _VisitStory extends StatelessWidget {
                       ],
                     ),
                   ],
+                  if (photos.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    PhotoStrip(photos: photos, onTap: onPhotoTap),
+                    const SizedBox(height: 9),
+                    Text(
+                      '${photos.length} Photos',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.forest,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                   if (stop.memo != null && stop.memo!.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
@@ -517,7 +592,7 @@ class _StopStory extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 14),
-                _PhotoStrip(photos: photos),
+                PhotoStrip(photos: photos),
                 const SizedBox(height: 9),
                 Text(
                   '${photos.length} Photos',
@@ -534,40 +609,4 @@ class _StopStory extends StatelessWidget {
       ],
     ),
   );
-}
-
-class _PhotoStrip extends StatelessWidget {
-  const _PhotoStrip({required this.photos});
-  final List<TripPhoto> photos;
-  @override
-  Widget build(BuildContext context) {
-    if (photos.isEmpty) return const SizedBox.shrink();
-    final shown = photos.take(2).toList();
-    if (shown.length == 1) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: AspectRatio(
-          aspectRatio: 16 / 8,
-          child: TripImage(path: shown.first.localPath),
-        ),
-      );
-    }
-    return SizedBox(
-      height: 116,
-      child: Row(
-        children: [
-          for (final photo in shown)
-            Expanded(
-              child: Padding(
-                padding: EdgeInsets.only(right: photo == shown.last ? 0 : 8),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: TripImage(path: photo.localPath),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }

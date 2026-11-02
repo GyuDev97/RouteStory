@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:route_story/features/trips/application/stop_service.dart';
 import 'package:route_story/features/trips/data/repositories/local_trip_repository.dart';
@@ -7,10 +7,12 @@ import 'package:route_story/features/trips/domain/entities/gps_point.dart';
 import 'package:route_story/features/trips/domain/entities/manual_marker.dart';
 import 'package:route_story/features/trips/domain/entities/stop.dart';
 import 'package:route_story/features/trips/domain/entities/trip.dart';
+import 'package:route_story/features/trips/domain/entities/trip_photo.dart';
 import 'package:route_story/features/trips/domain/repositories/trip_repository.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'support/gps_scenario.dart';
+import 'support/trip_seed.dart';
 
 class FlakyRepository implements TripRepository {
   FlakyRepository(this.inner);
@@ -23,6 +25,7 @@ class FlakyRepository implements TripRepository {
     List<Stop> upserts = const [],
     List<String> deleteIds = const [],
     StopAnalysisStatus? status,
+    Map<String, String> photoStopRemap = const {},
   }) async {
     saveCalls++;
     if (failSaves > 0) {
@@ -34,8 +37,33 @@ class FlakyRepository implements TripRepository {
       upserts: upserts,
       deleteIds: deleteIds,
       status: status,
+      photoStopRemap: photoStopRemap,
     );
   }
+
+  @override
+  Future<List<TripPhoto>> getPhotos(String tripId) => inner.getPhotos(tripId);
+  @override
+  Future<void> savePhotos(
+    String tripId, {
+    List<TripPhoto> upserts = const [],
+    PhotoMatchStatus? status,
+  }) => inner.savePhotos(tripId, upserts: upserts, status: status);
+  @override
+  Future<void> setPhotoMatchStatus(String tripId, PhotoMatchStatus s) =>
+      inner.setPhotoMatchStatus(tripId, s);
+  @override
+  Future<void> updateTripDetails(
+    String tripId, {
+    String? title,
+    String? coverPhotoId,
+    bool clearCover = false,
+  }) => inner.updateTripDetails(
+    tripId,
+    title: title,
+    coverPhotoId: coverPhotoId,
+    clearCover: clearCover,
+  );
 
   @override
   Future<List<Trip>> getRecentTrips() => inner.getRecentTrips();
@@ -59,49 +87,6 @@ class FlakyRepository implements TripRepository {
   @override
   Future<void> setStopAnalysisStatus(String tripId, StopAnalysisStatus s) =>
       inner.setStopAnalysisStatus(tripId, s);
-}
-
-const tripId = 'trip-1';
-
-/// Cafe (40 min) -> 20 min drive -> sight (20 min).
-class Seeded {
-  late DateTime cafeArrival, cafeDeparture, sightArrival, sightDeparture;
-  late double cafeLat, cafeLng, sightLat, sightLng;
-  late int pointCount;
-}
-
-Future<Seeded> seed(TripRepository repo, {bool withPoints = true}) async {
-  final s = GpsScenario()..move(20.min, speed: 10);
-  final seeded = Seeded()
-    ..cafeLat = s.lat
-    ..cafeLng = s.lng
-    ..cafeArrival = s.now;
-  s.stay(40.min);
-  seeded.cafeDeparture = s.now;
-  s.move(20.min, speed: 10);
-  seeded
-    ..sightLat = s.lat
-    ..sightLng = s.lng
-    ..sightArrival = s.now;
-  s.stay(20.min);
-  seeded.sightDeparture = s.now;
-  s.move(5.min, speed: 10);
-  await repo.saveTrip(
-    Trip(
-      id: tripId,
-      title: '오늘의 여정',
-      startTime: DateTime(2026, 9, 1, 9),
-      endTime: s.now,
-      totalDistance: 1000,
-    ),
-  );
-  if (withPoints) {
-    for (final p in s.points) {
-      await repo.saveGpsPoint(tripId, p);
-    }
-  }
-  seeded.pointCount = s.points.length;
-  return seeded;
 }
 
 void main() {
